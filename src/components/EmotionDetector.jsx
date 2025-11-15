@@ -8,7 +8,9 @@ const EmotionDetector = ({ onEmotionDetected, isDetecting, setIsDetecting }) => 
   const [currentEmotion, setCurrentEmotion] = useState(null)
 
   const handleEmotionDetected = (emotion) => {
+    console.log('🎭 EmotionDetector: Received emotion:', emotion)
     setCurrentEmotion(emotion)
+    console.log('🎭 EmotionDetector: Calling onEmotionDetected with:', emotion)
     onEmotionDetected(emotion)
     setIsDetecting(false)
   }

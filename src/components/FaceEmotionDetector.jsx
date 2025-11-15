@@ -24,15 +24,57 @@ const FaceEmotionDetector = ({ onEmotionDetected, isDetecting, setIsDetecting })
 
   const loadModel = async () => {
     try {
+      setIsModelLoading(true)
+      setError(null)
+      
+      // Wait for TensorFlow.js to be ready
       await tf.ready()
-      const faceLandmarksModel = await faceLandmarksDetection.load(
-        faceLandmarksDetection.SupportedPackages.mediapipeFacemesh
+      console.log('TensorFlow.js ready')
+      
+      // Use createDetector with SupportedModels (correct API for version 1.0.6)
+      const modelType = faceLandmarksDetection.SupportedModels.MediaPipeFaceMesh
+      console.log('Creating detector with model:', modelType)
+      
+      // Try TensorFlow.js runtime first (more stable, avoids MediaPipe WASM issues)
+      // This runtime doesn't require MediaPipe WASM files and is more compatible
+      const detectorConfig = {
+        runtime: 'tfjs',
+        refineLandmarks: false,
+        maxFaces: 1
+      }
+      
+      console.log('Creating detector with TensorFlow.js runtime (more stable)...')
+      
+      // Create detector with timeout
+      const createPromise = faceLandmarksDetection.createDetector(modelType, detectorConfig)
+      
+      // Add timeout to prevent hanging (30 seconds)
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Model loading timeout after 30 seconds')), 30000)
       )
+      
+      const faceLandmarksModel = await Promise.race([createPromise, timeoutPromise])
+      
+      console.log('Model loaded successfully')
       setModel(faceLandmarksModel)
       setIsModelLoading(false)
     } catch (err) {
       console.error('Error loading model:', err)
-      setError('Failed to load emotion detection model')
+      
+      // Provide more specific error messages
+      let errorMessage = 'Failed to load emotion detection model'
+      
+      if (err.message && err.message.includes('timeout')) {
+        errorMessage = 'Model loading timed out. Please check your internet connection and try again.'
+      } else if (err.message && (err.message.includes('fetch') || err.message.includes('network'))) {
+        errorMessage = 'Unable to download model files. Please check your internet connection and try again.'
+      } else if (err.message && err.message.includes('WebGL')) {
+        errorMessage = 'WebGL is not supported in your browser. Please try Chrome, Firefox, or Edge.'
+      } else if (err.message) {
+        errorMessage = `Model loading failed: ${err.message}. Please try refreshing the page.`
+      }
+      
+      setError(errorMessage)
       setIsModelLoading(false)
     }
   }
@@ -98,9 +140,11 @@ const FaceEmotionDetector = ({ onEmotionDetected, isDetecting, setIsDetecting })
     canvas.height = video.videoHeight
 
     let lastEmotionCheck = 0
-    const emotionCheckInterval = 3000 // Check emotion every 3 seconds
+    const emotionCheckInterval = 1500 // Check emotion every 1.5 seconds (more responsive)
     let emotionDetected = false
     let frameCount = 0
+    let emotionCounts = {} // Track emotion detections
+    const requiredDetections = 1 // Only need 1 detection to trigger (more responsive)
 
     const detect = async () => {
       if (!isDetecting || !video.videoWidth || emotionDetected) {
@@ -115,9 +159,7 @@ const FaceEmotionDetector = ({ onEmotionDetected, isDetecting, setIsDetecting })
           return
         }
 
-        const faces = await model.estimateFaces({
-          input: video,
-          returnTensors: false,
+        const faces = await model.estimateFaces(video, {
           flipHorizontal: false,
           staticImageMode: false
         })
@@ -143,27 +185,64 @@ const FaceEmotionDetector = ({ onEmotionDetected, isDetecting, setIsDetecting })
             lastEmotionCheck = now
             const emotion = analyzeFacialExpression(faces[0])
             
-            // Send emotion to backend for processing
+            // Track emotion consistency
             if (emotion) {
-              try {
-                const response = await fetch('/api/process-emotion', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ emotion, source: 'face' })
-                })
-                if (response.ok) {
-                  const data = await response.json()
-                  if (data.processed_emotion) {
-                    emotionDetected = true
-                    onEmotionDetected(data.processed_emotion)
-                    stopDetection()
-                    return
+              emotionCounts[emotion] = (emotionCounts[emotion] || 0) + 1
+              
+              // Show current detected emotion on canvas
+              ctx.fillStyle = 'rgba(0, 0, 0, 0.8)'
+              ctx.fillRect(10, 10, 250, 50)
+              ctx.fillStyle = '#00ff88'
+              ctx.font = 'bold 20px Arial'
+              ctx.textAlign = 'left'
+              ctx.fillText(`Detected: ${emotion}`, 15, 35)
+              ctx.fillStyle = '#ffffff'
+              ctx.font = '14px Arial'
+              ctx.fillText(`Count: ${emotionCounts[emotion]}/${requiredDetections}`, 15, 52)
+              
+              // If we have consistent detections, send to backend
+              if (emotionCounts[emotion] >= requiredDetections) {
+                console.log(`✅ Emotion ${emotion} detected ${emotionCounts[emotion]} times, sending to backend...`)
+                try {
+                  const response = await fetch('/api/process-emotion', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ emotion, source: 'face' })
+                  })
+                  
+                  console.log('Backend response status:', response.status)
+                  
+                  if (response.ok) {
+                    const data = await response.json()
+                    console.log('Backend response data:', data)
+                    
+                    if (data.processed_emotion) {
+                      console.log('✅ Calling onEmotionDetected with:', data.processed_emotion)
+                      emotionDetected = true
+                      onEmotionDetected(data.processed_emotion)
+                      stopDetection()
+                      return
+                    } else {
+                      console.warn('⚠️ No processed_emotion in response:', data)
+                    }
+                  } else {
+                    const errorData = await response.json().catch(() => ({}))
+                    console.error('❌ Backend error:', response.status, errorData)
                   }
+                } catch (err) {
+                  console.error('❌ Error processing emotion:', err)
+                  // If API fails, still trigger with detected emotion
+                  console.log('🔄 Using detected emotion directly:', emotion)
+                  emotionDetected = true
+                  onEmotionDetected(emotion)
+                  stopDetection()
+                  return
                 }
-              } catch (err) {
-                console.error('Error processing emotion:', err)
-                // Continue detection even if API call fails
+              } else {
+                console.log(`⏳ Emotion ${emotion} detected ${emotionCounts[emotion]}/${requiredDetections} times...`)
               }
+            } else {
+              console.log('⚠️ No emotion detected from facial expression')
             }
           }
         } else {
@@ -186,53 +265,76 @@ const FaceEmotionDetector = ({ onEmotionDetected, isDetecting, setIsDetecting })
   }
 
   const analyzeFacialExpression = (face) => {
-    // Simplified emotion detection based on facial landmarks
-    // In production, you'd use a trained emotion recognition model
+    // Improved emotion detection based on facial landmarks
     const keypoints = face.keypoints
     
     if (!keypoints || keypoints.length === 0) return null
 
-    // MediaPipe FaceMesh returns 468 landmarks
-    // Use approximate indices for facial features (these are approximate)
-    // Left eye center (around index 33)
-    // Right eye center (around index 263)
-    // Nose tip (around index 4)
-    // Mouth center (around index 13)
+    // Get key facial feature points
+    // Using more reliable indices for MediaPipe FaceMesh
+    const leftEyeInner = keypoints[33] || keypoints[0]
+    const rightEyeInner = keypoints[263] || keypoints[0]
+    const leftEyeOuter = keypoints[362] || keypoints[0]
+    const rightEyeOuter = keypoints[133] || keypoints[0]
+    const noseTip = keypoints[4] || keypoints[0]
+    const mouthLeft = keypoints[61] || keypoints[0]
+    const mouthRight = keypoints[291] || keypoints[0]
+    const mouthTop = keypoints[13] || keypoints[0]
+    const mouthBottom = keypoints[14] || keypoints[0]
     
-    const leftEyeIdx = Math.min(33, keypoints.length - 1)
-    const rightEyeIdx = Math.min(263, keypoints.length - 1)
-    const noseIdx = Math.min(4, keypoints.length - 1)
-    const mouthIdx = Math.min(13, keypoints.length - 1)
-    
-    const leftEye = keypoints[leftEyeIdx]
-    const rightEye = keypoints[rightEyeIdx]
-    const noseTip = keypoints[noseIdx]
-    const mouthCenter = keypoints[mouthIdx]
-    
-    if (!leftEye || !rightEye || !mouthCenter) return null
+    if (!leftEyeInner || !rightEyeInner || !mouthTop || !mouthBottom) return null
 
-    // Calculate distances and angles for emotion detection
-    const eyeDistance = Math.abs(leftEye.x - rightEye.x)
-    const mouthY = mouthCenter.y
-    const noseY = noseTip ? noseTip.y : (leftEye.y + rightEye.y) / 2
+    // Normalize coordinates (they're already normalized 0-1)
+    const eyeCenterY = (leftEyeInner.y + rightEyeInner.y) / 2
+    const eyeDistance = Math.abs(leftEyeInner.x - rightEyeInner.x)
+    const mouthCenterY = (mouthTop.y + mouthBottom.y) / 2
+    const mouthWidth = Math.abs(mouthLeft.x - mouthRight.x)
+    const mouthHeight = Math.abs(mouthTop.y - mouthBottom.y)
     
-    // Simple heuristic-based emotion detection
-    // This is a simplified version - in production use a trained ML model
-    const mouthOpenness = Math.abs(mouthY - noseY)
-    const eyeOpenness = (Math.abs(leftEye.y - (leftEye.y + rightEye.y) / 2) + 
-                        Math.abs(rightEye.y - (leftEye.y + rightEye.y) / 2)) / 2
+    // Calculate facial expression metrics
+    const mouthOpenness = mouthHeight / eyeDistance // Normalized by eye distance
+    const eyebrowPosition = eyeCenterY // Lower = raised eyebrows
+    const mouthCurvature = (mouthLeft.y + mouthRight.y) / 2 - mouthCenterY // Positive = smile
     
-    // For demo purposes, use heuristics to determine emotion
-    // In production, this would use a trained emotion classifier
-    // High mouth openness + high eye openness = happy
-    if (mouthOpenness > 0.1 && eyeOpenness > 0.05) {
-      return 'happy'
+    // Improved emotion detection with better thresholds
+    const emotions = []
+    
+    // Happy: Smiling mouth (corners up), open mouth, raised eyebrows
+    if (mouthCurvature > 0.01 && mouthOpenness > 0.15) {
+      emotions.push({ emotion: 'happy', confidence: Math.min(0.9, mouthCurvature * 50) })
     }
-    // Low mouth position relative to nose = sad
-    if (mouthY > noseY + 0.05) {
-      return 'sad'
+    
+    // Sad: Downturned mouth, low eyebrows
+    if (mouthCurvature < -0.01 && eyebrowPosition > 0.5) {
+      emotions.push({ emotion: 'sad', confidence: Math.min(0.9, Math.abs(mouthCurvature) * 50) })
     }
-    // Medium values = neutral
+    
+    // Energetic: Wide open mouth, wide eyes
+    if (mouthOpenness > 0.25 && eyeDistance > 0.15) {
+      emotions.push({ emotion: 'energetic', confidence: Math.min(0.85, mouthOpenness * 3) })
+    }
+    
+    // Calm: Small mouth, relaxed features
+    if (mouthOpenness < 0.1 && Math.abs(mouthCurvature) < 0.005) {
+      emotions.push({ emotion: 'calm', confidence: 0.7 })
+    }
+    
+    // Stressed: Tight mouth, furrowed brow
+    if (mouthOpenness < 0.08 && eyebrowPosition < 0.45) {
+      emotions.push({ emotion: 'stressed', confidence: 0.65 })
+    }
+    
+    // Return the emotion with highest confidence, or neutral
+    if (emotions.length > 0) {
+      emotions.sort((a, b) => b.confidence - a.confidence)
+      const detected = emotions[0]
+      console.log('Detected emotion:', detected.emotion, 'confidence:', detected.confidence.toFixed(2))
+      return detected.emotion
+    }
+    
+    // Default to neutral if no strong emotion detected
+    // But still return neutral so it can be detected
+    console.log('No strong emotion detected, defaulting to neutral')
     return 'neutral'
   }
 
@@ -248,10 +350,16 @@ const FaceEmotionDetector = ({ onEmotionDetected, isDetecting, setIsDetecting })
   if (error) {
     return (
       <div className="face-detector-error">
-        <p>{error}</p>
-        <button onClick={startDetection} className="retry-btn">
-          Try Again
-        </button>
+        <div className="error-icon">⚠️</div>
+        <p className="error-message">{error}</p>
+        <div className="error-actions">
+          <button onClick={loadModel} className="retry-btn">
+            🔄 Retry Loading Model
+          </button>
+          <p className="error-hint">
+            💡 Tip: Make sure you have a stable internet connection. The model needs to be downloaded on first use.
+          </p>
+        </div>
       </div>
     )
   }
@@ -274,14 +382,32 @@ const FaceEmotionDetector = ({ onEmotionDetected, isDetecting, setIsDetecting })
             Start Detection
           </button>
         ) : (
-          <button onClick={stopDetection} className="stop-btn">
-            Stop Detection
-          </button>
+          <>
+            <button onClick={stopDetection} className="stop-btn">
+              Stop Detection
+            </button>
+            <button 
+              onClick={() => {
+                console.log('🧪 Manual test: Triggering with neutral emotion')
+                onEmotionDetected('neutral')
+                stopDetection()
+              }} 
+              className="test-btn"
+              style={{ marginLeft: '10px', padding: '12px 20px', background: '#f39c12', color: 'white', border: 'none', borderRadius: '20px', cursor: 'pointer', fontWeight: '600' }}
+            >
+              🧪 Test Recommendations
+            </button>
+          </>
         )}
       </div>
       
       {isDetecting && (
-        <p className="detection-status">Analyzing your facial expression...</p>
+        <div className="detection-status">
+          <p>Analyzing your facial expression...</p>
+          <p className="detection-hint">
+            💡 Try smiling, frowning, or showing different expressions. The system will detect your emotion after a few seconds.
+          </p>
+        </div>
       )}
     </div>
   )

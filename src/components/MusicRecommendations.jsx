@@ -8,11 +8,15 @@ const MusicRecommendations = ({ emotion, onClear }) => {
   const [error, setError] = useState(null)
 
   useEffect(() => {
-    fetchRecommendations()
+    console.log('🎵 MusicRecommendations: Emotion changed to:', emotion)
+    if (emotion) {
+      fetchRecommendations()
+    }
   }, [emotion])
 
   const fetchRecommendations = async () => {
     try {
+      console.log('🎵 Fetching recommendations for emotion:', emotion)
       setLoading(true)
       setError(null)
 
@@ -20,10 +24,20 @@ const MusicRecommendations = ({ emotion, onClear }) => {
         emotion: emotion
       })
 
-      setRecommendations(response.data.recommendations || [])
+      console.log('🎵 Recommendations received:', response.data)
+      const recs = response.data.recommendations || []
+      console.log('🎵 Number of recommendations:', recs.length)
+      
+      if (recs.length === 0) {
+        console.log('⚠️ No recommendations from API, using fallback')
+        setRecommendations(getFallbackRecommendations(emotion))
+      } else {
+        setRecommendations(recs)
+      }
       setLoading(false)
     } catch (err) {
-      console.error('Error fetching recommendations:', err)
+      console.error('❌ Error fetching recommendations:', err)
+      console.log('🔄 Using fallback recommendations for:', emotion)
       setError('Failed to fetch music recommendations. Using fallback recommendations.')
       // Fallback recommendations
       setRecommendations(getFallbackRecommendations(emotion))

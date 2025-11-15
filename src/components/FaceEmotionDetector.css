@@ -110,6 +110,14 @@
   animation: fadeInOut 2s ease-in-out infinite;
 }
 
+.detection-hint {
+  margin-top: 10px;
+  font-size: 0.9rem;
+  font-weight: 400;
+  color: #718096;
+  font-style: italic;
+}
+
 @keyframes fadeInOut {
   0%, 100% {
     opacity: 0.7;
@@ -119,10 +127,46 @@
   }
 }
 
-.face-detector-loading,
-.face-detector-error {
+.face-detector-loading {
   text-align: center;
   padding: 50px;
+}
+
+.face-detector-error {
+  text-align: center;
+  padding: 40px;
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 20px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+}
+
+.error-icon {
+  font-size: 4rem;
+  margin-bottom: 20px;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.error-message {
+  color: #e74c3c;
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-bottom: 25px;
+  line-height: 1.6;
+}
+
+.error-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 15px;
+}
+
+.error-hint {
+  color: #718096;
+  font-size: 0.9rem;
+  margin-top: 10px;
+  max-width: 400px;
+  line-height: 1.5;
 }
 
 .spinner {

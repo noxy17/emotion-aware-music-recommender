@@ -7,6 +7,13 @@ function App() {
   const [detectedEmotion, setDetectedEmotion] = useState(null)
   const [isDetecting, setIsDetecting] = useState(false)
 
+  // Debug: Log when emotion is detected
+  React.useEffect(() => {
+    if (detectedEmotion) {
+      console.log('🎵 App: Emotion detected, showing recommendations for:', detectedEmotion)
+    }
+  }, [detectedEmotion])
+
   return (
     <div className="app">
       <header className="app-header">
